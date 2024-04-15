@@ -1,8 +1,4 @@
 """
-todo:
-    - make changes to add our own models
-    - reduce training set size
-
 this file is sourced from:
 https://github.com/open-spaced-repetition/srs-benchmark/blob/main/script.py
 """
@@ -237,7 +233,7 @@ def process(file):
                     batch_size=batch_size,
                 )
                 w_list.append(trainer.train(verbose=verbose))
-                
+
             # No error, so training data was adequate
             sizes.append(len(train_set))
             testsets.append(test_set)
