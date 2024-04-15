@@ -52,27 +52,20 @@ verbose: bool = False
 verbose_inadequate_data: bool = False
 do_fullinfo_stats: bool = False
 
+n_user_samples: int = 10
+
 dry_run = os.environ.get("DRY_RUN")
 only_pretrain = os.environ.get("PRETRAIN")
-rust = os.environ.get("FSRS_RS")
-if rust:
-    path = "FSRS-rs"
-    if do_fullinfo_stats:
-        path += "-fullinfo"
-    from anki._backend import RustBackend
 
-    backend = RustBackend()
-
-else:
-    path = "FSRS-4.5"
-    if dry_run:
-        path += "-dry-run"
-    if only_pretrain:
-        path += "-pretrain"
-    if dev_mode:
-        path += "-dev"
-    if do_fullinfo_stats:
-        path += "-fullinfo"
+path = "FSRS-4.5"
+if dry_run:
+    path += "-dry-run"
+if only_pretrain:
+    path += "-pretrain"
+if dev_mode:
+    path += "-dev"
+if do_fullinfo_stats:
+    path += "-fullinfo"
 
 
 def predict(w_list, testsets, last_rating=None, file=None):
@@ -224,31 +217,27 @@ def process(file):
             continue
         # train_set.loc[train_set["i"] == 2, "delta_t"] = train_set.loc[train_set["i"] == 2, "delta_t"].map(lambda x: max(1, round(x)))
         try:
-            if rust:
-                train_set_items = convert_to_items(train_set[train_set["i"] >= 2])
-                weights = backend.benchmark(train_set_items, train_set_items)
-                w_list.append(weights)
+            optimizer.S0_dataset_group = (
+                train_set[train_set["i"] == 2]
+                # .groupby(by=["first_rating", "delta_t"], group_keys=False)
+                .groupby(by=["r_history", "delta_t"], group_keys=False)
+                .agg({"y": ["mean", "count"]})
+                .reset_index()
+            )
+            _ = optimizer.pretrain(dataset=train_set, verbose=verbose)
+            if only_pretrain:
+                w_list.append(optimizer.init_w)
             else:
-                optimizer.S0_dataset_group = (
-                    train_set[train_set["i"] == 2]
-                    # .groupby(by=["first_rating", "delta_t"], group_keys=False)
-                    .groupby(by=["r_history", "delta_t"], group_keys=False)
-                    .agg({"y": ["mean", "count"]})
-                    .reset_index()
+                trainer = Trainer(
+                    train_set,
+                    None,
+                    optimizer.init_w,
+                    n_epoch=n_epoch,
+                    lr=lr,
+                    batch_size=batch_size,
                 )
-                _ = optimizer.pretrain(dataset=train_set, verbose=verbose)
-                if only_pretrain:
-                    w_list.append(optimizer.init_w)
-                else:
-                    trainer = Trainer(
-                        train_set,
-                        None,
-                        optimizer.init_w,
-                        n_epoch=n_epoch,
-                        lr=lr,
-                        batch_size=batch_size,
-                    )
-                    w_list.append(trainer.train(verbose=verbose))
+                w_list.append(trainer.train(verbose=verbose))
+                
             # No error, so training data was adequate
             sizes.append(len(train_set))
             testsets.append(test_set)
@@ -378,12 +367,13 @@ if __name__ == "__main__":
 
     for dataset_path in [dataset_path0, dataset_path1, dataset_path2]:
         for file in Path(dataset_path).glob("*.csv"):
+            if (len(processed_user) + len(unprocessed_files) > n_user_samples):
+                break
             if int(file.stem) in processed_user:
                 continue
             unprocessed_files.append(file)
 
     unprocessed_files.sort(key=lambda x: int(x.stem), reverse=False)
-
     num_threads = int(os.environ.get("THREADS", "4"))
     with ProcessPoolExecutor(max_workers=num_threads) as executor:
         futures = [executor.submit(process, file) for file in unprocessed_files]
