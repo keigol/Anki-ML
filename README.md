@@ -9,5 +9,6 @@ This project aims to come up with a better alternative for the SM-2 algorithm. S
 
 ## References
 [FSRS-Anki-20k dataset](https://huggingface.co/datasets/open-spaced-repetition/FSRS-Anki-20k)
+[Benchmarking scripts](https://github.com/open-spaced-repetition/srs-benchmark)
 
 
