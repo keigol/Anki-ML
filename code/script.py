@@ -3,7 +3,6 @@ this file is sourced from:
 https://github.com/open-spaced-repetition/srs-benchmark/blob/main/script.py
 """
 
-
 import os
 import sys
 import json
