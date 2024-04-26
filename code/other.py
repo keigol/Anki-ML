@@ -12,6 +12,8 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import torch
 import json
 import os
+
+from sklearn.ensemble import RandomForestClassifier
 from torch import nn
 from torch import Tensor
 from sklearn.model_selection import TimeSeriesSplit
@@ -28,8 +30,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 torch.manual_seed(42)
 tqdm.pandas()
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
 
 lr: float = 4e-2
 wd: float = 1e-5
@@ -37,8 +38,6 @@ n_epoch: int = 5
 n_splits: int = 5
 batch_size: int = 512
 verbose: bool = False
-
-n_user_samples: int = 10
 
 model_name = os.environ.get("MODEL", "FSRSv3")
 
@@ -901,6 +900,18 @@ class NN_17(nn.Module):
         log_09 = -0.10536051565782628
         return log_09 / torch.log(r) * t
 
+class RandomForest(nn.Module):
+    def __init__(self, n_estimators=100, max_depth=None, random_state=42):
+        super(RandomForest, self).__init__()
+        self.model = RandomForestClassifier(n_estimators=n_estimators,
+                                            max_depth=max_depth,
+                                            random_state=random_state)
+    def forward(self, x):
+        return self.model.predict_proba(x)[:, 1]
+
+    def fit(self, x, y):
+        self.model.fit(x, y)
+
 
 def sm2(r_history):
     ivl = 0
@@ -1254,6 +1265,39 @@ def process_untrainable(file):
     result = evaluate(y, p, save_tmp, model_name, file)
     return result
 
+def process_random_forest(file):
+    model_name = "RandomForest"
+    dataset = pd.read_csv(file)
+    dataset = create_features(dataset, model_name)
+    if dataset.shape[0] < 6:
+        return
+    testsets = []
+    tscv = TimeSeriesSplit(n_splits=n_splits)
+    for train_index, test_index in tscv.split(dataset):
+        train_set = dataset.iloc[train_index].copy()
+        test_set = dataset.iloc[test_index].copy()
+        testsets.append((train_set, test_set))
+
+    p = []
+    y = []
+    save_tmp = []
+
+    for train_set, test_set in testsets:
+        X_train = train_set.drop(columns=['card_id', 'rating', 'y', 'i', 'r_history', 't_history'])
+        y_train = train_set['y']
+        X_test = test_set.drop(columns=['card_id','rating', 'y', 'i', 'r_history', 't_history'])
+        y_test = test_set['y']
+
+        model = RandomForest()
+        model.fit(X_train, y_train)
+        test_set['p'] = model.forward(X_test)
+        p.extend(test_set['p'].tolist())
+        y.extend(y_test.tolist())
+        save_tmp.append(test_set)
+
+    save_tmp = pd.concat(save_tmp)
+    result = evaluate(y, p, save_tmp, model_name, file)
+    return result
 
 def baseline(file):
     model_name = "AVG"
@@ -1421,6 +1465,8 @@ def process(args):
         return process_untrainable(file)
     if model_name == "AVG":
         return baseline(file)
+    elif model_name == "RandomForest":
+        return process_random_forest(file)
     dataset = pd.read_csv(file)
     if model_name == "GRU":
         model = RNN
@@ -1527,9 +1573,7 @@ def evaluate(y, p, df, model_name, file, w_list=None):
 if __name__ == "__main__":
     mp.set_start_method("spawn", force=True)
     unprocessed_files = []
-    dataset_path0 = "./dataset"
-    dataset_path1 = "./dataset/FSRS-Anki-20k/dataset/1/"
-    dataset_path2 = "./dataset/FSRS-Anki-20k/dataset/2/"
+    dataset_path = "./dataset"
     Path(f"evaluation/{model_name}").mkdir(parents=True, exist_ok=True)
     Path("result").mkdir(parents=True, exist_ok=True)
     result_file = Path(f"result/{model_name}.jsonl")
@@ -1543,29 +1587,38 @@ if __name__ == "__main__":
     else:
         processed_user = set()
 
-    for dataset_path in [dataset_path0, dataset_path1, dataset_path2]:
-        for file in Path(dataset_path).glob("*.csv"):
-            if (len(processed_user) + len(unprocessed_files) > n_user_samples):
-                break
-            if int(file.stem) in processed_user:
-                continue
-            unprocessed_files.append((file, model_name))
+    for file in Path(dataset_path).glob("*.csv"):
+        if int(file.stem) in processed_user:
+            continue
+        unprocessed_files.append((file, model_name))
 
     unprocessed_files.sort(key=lambda x: int(x[0].stem), reverse=False)
 
     num_threads = int(os.environ.get("THREADS", "8"))
-    with ProcessPoolExecutor(max_workers=num_threads) as executor:
-        futures = [executor.submit(process, file) for file in unprocessed_files]
-        for future in (
-            pbar := tqdm(as_completed(futures), total=len(futures), smoothing=0.03)
-        ):
+    debug = os.environ.get("DEBUG")
+    if debug:
+        pbar = tqdm(unprocessed_files, smoothing=0.03)
+        for file in pbar:
             try:
-                result = future.result()
+                result = process(file)
                 with open(f"result/{model_name}.jsonl", "a") as f:
                     f.write(json.dumps(result, ensure_ascii=False) + "\n")
                 pbar.set_description(f"Processed {result['user']}")
             except Exception as e:
                 tqdm.write(str(e))
+    else:
+        with ProcessPoolExecutor(max_workers=num_threads) as executor:
+            futures = [executor.submit(process, file) for file in unprocessed_files]
+            for future in (
+                pbar := tqdm(as_completed(futures), total=len(futures), smoothing=0.03)
+            ):
+                try:
+                    result = future.result()
+                    with open(f"result/{model_name}.jsonl", "a") as f:
+                        f.write(json.dumps(result, ensure_ascii=False) + "\n")
+                    pbar.set_description(f"Processed {result['user']}")
+                except Exception as e:
+                    tqdm.write(str(e))
 
     with open(f"result/{model_name}.jsonl", "r") as f:
         data = list(map(lambda x: json.loads(x), f.readlines()))

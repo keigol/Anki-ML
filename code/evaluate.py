@@ -106,6 +106,7 @@ if __name__ == "__main__":
         "HLR",
         "Transformer",
         "SM2",
+        "RandomForest",
     ):
         print(f"Model: {model}")
         m = []
