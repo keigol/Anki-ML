@@ -39,6 +39,8 @@ n_splits: int = 5
 batch_size: int = 512
 verbose: bool = False
 
+n_user_samples: int = 10
+
 model_name = os.environ.get("MODEL", "FSRSv3")
 
 
@@ -1573,7 +1575,9 @@ def evaluate(y, p, df, model_name, file, w_list=None):
 if __name__ == "__main__":
     mp.set_start_method("spawn", force=True)
     unprocessed_files = []
-    dataset_path = "./dataset"
+    dataset_path0 = "./dataset"
+    dataset_path1 = "./dataset/FSRS-Anki-20k/dataset/1/"
+    dataset_path2 = "./dataset/FSRS-Anki-20k/dataset/2/"
     Path(f"evaluation/{model_name}").mkdir(parents=True, exist_ok=True)
     Path("result").mkdir(parents=True, exist_ok=True)
     result_file = Path(f"result/{model_name}.jsonl")
@@ -1587,10 +1591,13 @@ if __name__ == "__main__":
     else:
         processed_user = set()
 
-    for file in Path(dataset_path).glob("*.csv"):
-        if int(file.stem) in processed_user:
-            continue
-        unprocessed_files.append((file, model_name))
+    for dataset_path in [dataset_path0, dataset_path1, dataset_path2]:
+        for file in Path(dataset_path).glob("*.csv"):
+            if (len(processed_user) + len(unprocessed_files) > n_user_samples):
+                break
+            if int(file.stem) in processed_user:
+                continue
+            unprocessed_files.append((file, model_name))
 
     unprocessed_files.sort(key=lambda x: int(x[0].stem), reverse=False)
 
