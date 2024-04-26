@@ -1,0 +1,2 @@
+{"metrics": {"RMSE": 0.355986, "LogLoss": 0.527878, "RMSE(bins)": 0.191019, "ICI": 0.155734}, "user": 6966, "size": 3125}
+{"metrics": {"RMSE": 0.394637, "LogLoss": 0.552962, "RMSE(bins)": 0.146108, "ICI": 0.054424}, "user": 8793, "size": 17655}

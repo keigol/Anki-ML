@@ -38,7 +38,7 @@ n_splits: int = 5
 batch_size: int = 512
 verbose: bool = False
 
-n_user_samples: int = 10
+n_user_samples: int = 1
 
 model_name = os.environ.get("MODEL", "FSRSv3")
 
@@ -770,6 +770,7 @@ class NN_17(nn.Module):
                 dtype=torch.float32,
             )
         )
+        
         self.rw = nn.Sequential(
             nn.Linear(3, self.hidden_size),
             nn.Mish(),
@@ -900,7 +901,62 @@ class NN_17(nn.Module):
     def inverse_forgetting_curve(self, r: Tensor, t: Tensor) -> Tensor:
         log_09 = -0.10536051565782628
         return log_09 / torch.log(r) * t
+class CNN(nn.Module):
+    def __init__(self, state_dict=None) -> None:
+        super(CNN, self).__init__()
 
+        # Define the convolutional layers
+        # self.conv2 = nn.Conv1d(in_channels=17, out_channels=32, kernel_size=3, padding=1)
+        # self.conv3 = nn.Conv1d(in_channels=32, out_channels=64, kernel_size=3, padding=1)
+        # Define a fully connected layer for the final output
+
+        # Activation and pooling layers
+        self.relu = nn.ReLU()
+        self.pool = nn.MaxPool1d(kernel_size=3)
+        self.fc = nn.Linear(17, 2)
+
+        if state_dict is not None:
+            self.load_state_dict(state_dict)
+        else:
+            try:
+                self.load_state_dict(
+                    torch.load(f"./{model_name}_pretrain.pth", map_location=device)
+                )
+            except FileNotFoundError:
+                pass
+
+    def forward(self, inputs):
+        inputs = inputs.permute(1, 0, 2)  # Shape: (batch_size, channels, time_steps)
+
+        # Dynamic layer size
+        self.conv1 = nn.Conv1d(in_channels=inputs.shape[1], out_channels=17, kernel_size=3, padding=1)
+
+        # Convert inputs to proper shape for convolutional layers
+        # Pass the inputs through convolutional layers with activation and pooling
+        x = self.conv1(inputs.float())
+        x = self.relu(x)
+        x = self.pool(x)
+
+        # x = self.conv2(x)
+        # x = self.relu(x)
+        # x = self.pool(x)
+
+        # x = self.conv3(x)
+        # x = self.relu(x)
+        # x = self.pool(x)
+
+        # Flatten the output of the convolutional layers
+        x = x.view(x.size(0), -1)
+        # Pass the flattened output through the fully connected layer
+        output = self.fc(x)
+        return output
+
+    def forgetting_curve(self, t, s):
+        return 0.9 ** (t / s)
+
+    def inverse_forgetting_curve(self, r: Tensor, t: Tensor) -> Tensor:
+        log_09 = -0.10536051565782628
+        return log_09 / torch.log(r) * t
 
 def sm2(r_history):
     ivl = 0
@@ -1034,7 +1090,7 @@ class Trainer:
                 elif isinstance(self.model, DASH):
                     outputs = self.model(sequences.transpose(0, 1))
                     retentions = outputs.squeeze(1)
-                elif isinstance(self.model, NN_17):
+                elif isinstance(self.model, NN_17) or isinstance(self.model, CNN):
                     outputs, _ = self.model(sequences)
                     stabilities = outputs[
                         seq_lens - 1,
@@ -1125,6 +1181,22 @@ class Trainer:
                     retentions = self.model.rw(
                         torch.stack([difficulties, stabilities, theoretical_r], dim=1)
                     ).squeeze(1)
+                elif isinstance(self.model, CNN):
+                    outputs, _ = self.model(sequences.transpose(0, 1))
+                    stabilities = outputs[
+                        seq_lens - 1,
+                        torch.arange(real_batch_size, device=device),
+                        0,
+                    ]
+                    difficulties = outputs[
+                        seq_lens - 1,
+                        torch.arange(real_batch_size, device=device),
+                        1,
+                    ]
+                    theoretical_r = self.model.forgetting_curve(delta_ts, stabilities)
+                    retentions = self.model.rw(
+                        torch.stack([difficulties, stabilities, theoretical_r], dim=1)
+                    ).squeeze(1)
                 else:
                     if isinstance(self.model, HLR):
                         outputs = self.model(sequences)
@@ -1195,7 +1267,7 @@ class Collection:
                 outputs = self.model(fast_dataset.x_train)
                 retentions = outputs.squeeze()
                 return retentions.cpu().tolist()
-            elif isinstance(self.model, NN_17):
+            elif isinstance(self.model, NN_17) or isinstance(self.model, CNN):
                 outputs, _ = self.model(fast_dataset.x_train.transpose(0, 1))
                 stabilities = outputs[
                     fast_dataset.seq_len - 1, torch.arange(len(fast_dataset)), 0
@@ -1440,6 +1512,8 @@ def process(args):
         model = DASH_ACTR
     elif model_name == "NN-17":
         model = NN_17
+    elif model_name == "CNN":
+        model = CNN
 
     dataset = create_features(dataset, model_name)
     if dataset.shape[0] < 6:
