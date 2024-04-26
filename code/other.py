@@ -1271,6 +1271,16 @@ def process_random_forest(file):
     model_name = "RandomForest"
     dataset = pd.read_csv(file)
     dataset = create_features(dataset, model_name)
+
+    # Feature Engineering: add revlog information from last 3 reviews
+    past_revlog_count = 5
+    for i in range(1, past_revlog_count + 1):
+        dataset[f'last_delta_t_{i}'] = dataset.groupby('card_id')['delta_t'].shift(i)
+        dataset[f'last_rating_{i}'] = dataset.groupby('card_id')['rating'].shift(i)
+        dataset[f'last_delta_t_{i}'] = dataset[f'last_delta_t_{i}'].fillna(-1)
+        dataset[f'last_rating_{i}'] = dataset[f'last_rating_{i}'].fillna(-1)
+
+
     if dataset.shape[0] < 6:
         return
     testsets = []
