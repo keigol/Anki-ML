@@ -13,7 +13,9 @@ import torch
 import json
 import os
 
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import LinearSVC
 from torch import nn
 from torch import Tensor
 from sklearn.model_selection import TimeSeriesSplit
@@ -914,6 +916,17 @@ class RandomForest(nn.Module):
     def fit(self, x, y):
         self.model.fit(x, y)
 
+class LinearSVM(nn.Module):
+    def __init__(self):
+        super(LinearSVM, self).__init__()
+        # self.model = SVC(kernel=kernel, probability=True)
+        self.model = CalibratedClassifierCV(LinearSVC(dual='auto'))
+
+    def forward(self, x):
+        return self.model.predict_proba(x)[:, 1]  # Probability of correct recall
+
+    def fit(self, x, y):
+        self.model.fit(x, y)
 
 def sm2(r_history):
     ivl = 0
@@ -1267,19 +1280,18 @@ def process_untrainable(file):
     result = evaluate(y, p, save_tmp, model_name, file)
     return result
 
-def process_random_forest(file):
-    model_name = "RandomForest"
+# If the model has a fit() method, use that instead of Trainer
+def process_fittable_model(file, model_name):
     dataset = pd.read_csv(file)
     dataset = create_features(dataset, model_name)
 
-    # Feature Engineering: add revlog information from last 3 reviews
-    past_revlog_count = 5
+    # Feature Engineering: add revlog information from last 5 reviews
+    past_revlog_count = 5 if model_name == "RandomForest" else 10
     for i in range(1, past_revlog_count + 1):
         dataset[f'last_delta_t_{i}'] = dataset.groupby('card_id')['delta_t'].shift(i)
         dataset[f'last_rating_{i}'] = dataset.groupby('card_id')['rating'].shift(i)
         dataset[f'last_delta_t_{i}'] = dataset[f'last_delta_t_{i}'].fillna(-1)
         dataset[f'last_rating_{i}'] = dataset[f'last_rating_{i}'].fillna(-1)
-
 
     if dataset.shape[0] < 6:
         return
@@ -1294,13 +1306,17 @@ def process_random_forest(file):
     y = []
     save_tmp = []
 
+    model = None
     for train_set, test_set in testsets:
         X_train = train_set.drop(columns=['card_id', 'rating', 'y', 'i', 'r_history', 't_history'])
         y_train = train_set['y']
         X_test = test_set.drop(columns=['card_id','rating', 'y', 'i', 'r_history', 't_history'])
         y_test = test_set['y']
 
-        model = RandomForest()
+        if model_name == "LinearSVM":
+            model = LinearSVM()
+        elif model_name == "RandomForest":
+            model = RandomForest()
         model.fit(X_train, y_train)
         test_set['p'] = model.forward(X_test)
         p.extend(test_set['p'].tolist())
@@ -1477,8 +1493,8 @@ def process(args):
         return process_untrainable(file)
     if model_name == "AVG":
         return baseline(file)
-    elif model_name == "RandomForest":
-        return process_random_forest(file)
+    elif model_name in ("RandomForest", "LinearSVM"):
+        return process_fittable_model(file, model_name)
     dataset = pd.read_csv(file)
     if model_name == "GRU":
         model = RNN
